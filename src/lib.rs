@@ -1,11 +1,11 @@
-#![doc(html_root_url = "https://docs.rs/elif/0.0.1")]
+#![doc(html_root_url = "https://docs.rs/elif/0.0.2")]
 //! file and directory walker for Rust
 //!
 
 use std::error::Error;
 use std::fs;
 // use fs_extra;
-// use std::path;
+use std::path::PathBuf;
 
 /*
 pub fn read_dir_entries<P: AsRef<Path>>(path: P) -> io::Result<Vec<PathBuf>> {
@@ -43,22 +43,30 @@ pub fn read_dir_entries(bpath: &str) ->
   Ok(entries)
 }
 
-/// walk dir entries
-pub fn walk_dir_entries(ignores: &Vec<String>, bpath: &str, dep: u64) ->
+/// walk dir entries (with compare)
+pub fn walk_dir_entries(ignores: &Vec<String>, bpaths: &Vec<&str>, dep: u64) ->
   Result<u64, Box<dyn Error>> {
   let mut total: u64 = 0;
   let depth = String::from_utf8((0..dep).into_iter().map(|_| 0x20).collect())?;
-//  println!("{}+{}", depth, bpath);
-  let rde = read_dir_entries(bpath);
-  // let lde = rde.unwrap(); // unwrap Ok([...]) ignore Result check
-  // if let Ok(lde) = rde {
-  match rde {
-  Err(e) => eprintln!("err: {}", e),
-  Ok(lde) => for de in lde {
-    let p = &de.path();
+//  println!("{}+{} ({})", depth, bpaths[0], bpaths[1]);
+  let Ok(pde) = read_dir_entries(bpaths[0]) else {
+    return Err(format!("no dir entries in [{}]", bpaths[0]).into());
+  };
+  let Ok(qde) = read_dir_entries(bpaths[1]) else {
+    return Err(format!("no dir entries in [{}]", bpaths[1]).into());
+  };
+  for pe in pde {
+    let p = &pe.path();
+    let mut q = PathBuf::from(""); // dummy
+    let mut f = false;
+    for qe in &qde {
+      let qpb = &qe.path();
+      if qpb.file_name() == p.file_name() { q = qpb.clone(); f = true; break; }
+    }
+    print!("{}", if f {"T"}else{"F"});
     print!("{}{}", depth, if p.is_dir() {"+"}else{"-"});
-    // println!("{:?}", de); // fs::DirEntry
-    // println!("{:?}", de.file_name()); // OsString
+    // println!("{:?}", pe); // fs::DirEntry
+    // println!("{:?}", pe.file_name()); // OsString
     println!("{}", p.display()); // path::PathBuf
     if p.is_file() {
       let rmf = fs::metadata(p);
@@ -71,33 +79,65 @@ pub fn walk_dir_entries(ignores: &Vec<String>, bpath: &str, dep: u64) ->
       }
     }
     if p.is_dir() {
-      let e = de.file_name().to_str().expect("invalid_name").to_string();
+      let e = pe.file_name().to_str().expect("invalid_name").to_string();
       if !ignores.contains(&e) {
         let s = p.to_str().expect("invalid_path");
-        total += walk_dir_entries(ignores, s, dep + 1)?;
+        let t = q.to_str().expect("invalid_path");
+        total += walk_dir_entries(ignores, &vec![s, t], dep + 1)?;
       }
     }
-  }
   }
   Ok(total)
 }
 
-/// macro walk dir entries
+/// macro walk dir entries (with compare)
 #[macro_export]
 macro_rules! walk_dir_entries {
-  ($ignores: expr, $bpath: expr) => {
-    walk_dir_entries($ignores, $bpath, 0)
+  ($ignores: expr, $bpaths: expr) => {
+    walk_dir_entries($ignores, $bpaths, 0)
   };
   ($ignores: expr) => {
-    walk_dir_entries($ignores, ".", 0)
+    walk_dir_entries($ignores, vec![".", "."], 0)
   };
 }
 
-/// walker
-pub fn walker() -> Result<(), Box<dyn Error>> {
+/// walker (with compare)
+pub fn walker(dirs: Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
   let ignores = vec![".git", "target"].into_iter().map(|s|
     s.to_string()).collect();
-  Ok(println!("total: {}", walk_dir_entries!(&ignores)?))
+  let f = |pbs: &Vec<&str>| {
+    println!("[{}] - [{}]", pbs[0], pbs[1]);
+    let t = match walk_dir_entries!(&ignores, pbs) {
+    Err(e) => { eprintln!("{:?}", e); 0 },
+    Ok(t) => t
+    };
+    println!("total: {}", t);
+  };
+  let mut pbs = dirs.iter().map(|p| p.to_str().unwrap()).collect::<Vec<_>>();
+  f(&pbs);
+  pbs.reverse();
+  f(&pbs);
+  Ok(())
+}
+
+/// take2
+pub fn take2<T>(args: T) -> Vec<PathBuf> where T: Iterator<Item = String> {
+  let mut dirs = Vec::<PathBuf>::new();
+  for a in args {
+    let p = PathBuf::from(a);
+    if !p.exists() { continue; }
+    if !p.is_dir() { continue; }
+    dirs.push(p);
+  }
+  println!("dirs: {}", dirs.len());
+  for (i, p) in dirs.iter().enumerate() {
+    println!("dirs[{}]: {}", i, p.display());
+  }
+  if dirs.len() < 2 {
+    println!("Usage: {} a dir0 dir1 ...", env!("CARGO_PKG_NAME"));
+    return vec!["src", "src"].into_iter().map(|s| PathBuf::from(s)).collect();
+  }
+  dirs
 }
 
 /// tests
@@ -108,6 +148,6 @@ mod tests {
   /// [-- --nocapture] [-- --show-output]
   #[test]
   fn test_walker() {
-    assert_eq!(walker().unwrap(), ());
+    assert_eq!(walker(take2(std::env::args().skip(1))).unwrap(), ());
   }
 }
