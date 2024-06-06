@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/elif/0.0.3")]
+#![doc(html_root_url = "https://docs.rs/elif/0.0.4")]
 //! file and directory walker for Rust
 //!
 
@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use md5;
 // use binascii::bin2hex;
 
+/// get file metadata
 pub fn file_meta(p: &PathBuf) -> Result<fs::Metadata, Box<dyn Error>> {
   let Ok(mf) = fs::metadata(p) else {
     return Err(format!("cannot get metadata: {}", p.display()).into())
@@ -19,6 +20,7 @@ pub fn file_meta(p: &PathBuf) -> Result<fs::Metadata, Box<dyn Error>> {
   Ok(mf)
 }
 
+/// calc md5 sum digest
 pub fn md5sum(p: &PathBuf, sz: u64) -> Result<String, Box<dyn Error>> {
 /*
   let s = "abcdefghijklmnopqrstuvwxyz".as_bytes();
@@ -85,48 +87,73 @@ pub fn read_dir_entries(bpath: &str) ->
 }
 
 /// walk dir entries (with compare)
-pub fn walk_dir_entries(ignores: &Vec<String>, bpaths: &Vec<&str>, dep: u64) ->
+pub fn walk_dir_entries(inf: bool,
+  ignores: &Vec<String>, bpaths: &Vec<&str>, dep: u64) ->
   Result<u64, Box<dyn Error>> {
   let mut total: u64 = 0;
   let depth = String::from_utf8((0..dep).into_iter().map(|_| 0x20).collect())?;
 //  println!("{}+{} ({})", depth, bpaths[0], bpaths[1]);
-  let de = (0..2).into_iter().map(|i| {
-    let Ok(ent) = read_dir_entries(bpaths[i]) else {
-      panic!("no dir entries in [{}]", bpaths[i])
-    };
-    ent
-  }).collect::<Vec<_>>();
+  let mut msg = vec![]; // first define for dir entries
+  let mut de = vec![];
+  for i in 0..2 {
+    match read_dir_entries(bpaths[i]) {
+    Err(e) => { msg.push(format!("no dir entries [{}] [{}]", e, bpaths[i])); },
+    Ok(ent) => { de.push(ent); }
+    }
+  }
+  if msg.len() > 0 || de.len() < 2 { return Err(msg.join("\x0A").into()); }
   for pe in &de[0] {
-    let p = &pe.path();
-    let mut q = PathBuf::from(""); // dummy
+    let p = &pe.path(); // &PathBuf
+    let mut q = PathBuf::from(""); // dummy PathBuf
     let mut f = false;
     for qe in &de[1] {
       let qpb = &qe.path();
       if qpb.file_name() == p.file_name() { q = qpb.clone(); f = true; break; }
     }
-    print!("{}", if f {"T"}else{"F"});
-    print!("{}{}", depth, if p.is_dir() {"+"}else{"-"});
-    // println!("{:?}", pe); // fs::DirEntry
-    // println!("{:?}", pe.file_name()); // OsString
-    println!("{}", p.display()); // path::PathBuf
+    let mut msg = vec![]; // second define for metadata and md5 sum digest
+    let mut sz = vec![];
+    let mut digest = vec![];
     if p.is_file() {
-      let sz = [p, &q].iter().map(|p| {
-        let Ok(mf) = file_meta(p) else { return 0 };
-        mf.len()
-      }).collect::<Vec<_>>();
-      let digest = [p, &q].iter().enumerate().map(|(i, p)| {
-        let Ok(s) = md5sum(p, sz[i]) else { return "".to_string() };
-        s
-      }).collect::<Vec<_>>();
-      for i in 0..2 { println!(" {} {}", sz[i], digest[i]); }
+      for p in [p, &q].iter() {
+        sz.push(match file_meta(p) {
+        Err(e) => { msg.push(format!("metadata: {}", e)); 0 },
+        Ok(mf) => { mf.len() }
+        });
+      }
+      if sz[0] != sz[1] {
+        for _i in 0..2 { digest.push("".to_string()); } // skip md5sum
+      } else {
+        for (i, p) in [p, &q].iter().enumerate() {
+          digest.push(match md5sum(p, sz[i]) {
+          Err(e) => { msg.push(format!("md5sum: {}", e)); "".to_string() },
+          Ok(s) => { s }
+          });
+        }
+      }
       total += sz[0];
+      if msg.len() > 0 || sz.len() < 2 || digest.len() < 2 {
+        // eprintln!(" ===error=== {}", msg.join("\x0A"));
+        f = false;
+      }
+      if sz[0] != sz[1] || digest[0] != digest[1] { f = false; }
+    }
+    if p.is_dir() || (inf || !f) {
+      print!("{}", if f {"T"}else{"F"});
+      print!("{}{}", depth, if p.is_dir() {"+"}else{"-"});
+      // println!("{:?}", pe); // fs::DirEntry
+      // println!("{:?}", pe.file_name()); // OsString
+      println!("{}", p.display()); // path::PathBuf
+      if !p.is_dir() {
+        for i in 0..2 { println!(" {} {}", sz[i], digest[i]); }
+      }
     }
     if p.is_dir() {
       let e = pe.file_name().to_str().expect("invalid_name").to_string();
       if !ignores.contains(&e) {
-        let s = p.to_str().expect("invalid_path");
-        let t = q.to_str().expect("invalid_path");
-        total += walk_dir_entries(ignores, &vec![s, t], dep + 1)?;
+        let st = [p, &q].iter().map(|p| {
+          p.to_str().expect("invalid_path")
+        }).collect::<Vec<_>>();
+        total += walk_dir_entries(inf, ignores, &st, dep + 1)?;
       }
     }
   }
@@ -136,21 +163,21 @@ pub fn walk_dir_entries(ignores: &Vec<String>, bpaths: &Vec<&str>, dep: u64) ->
 /// macro walk dir entries (with compare)
 #[macro_export]
 macro_rules! walk_dir_entries {
-  ($ignores: expr, $bpaths: expr) => {
-    walk_dir_entries($ignores, $bpaths, 0)
+  ($inf: expr, $ignores: expr, $bpaths: expr) => {
+    walk_dir_entries($inf, $ignores, $bpaths, 0)
   };
-  ($ignores: expr) => {
-    walk_dir_entries($ignores, vec![".", "."], 0)
+  ($inf: expr, $ignores: expr) => {
+    walk_dir_entries($inf, $ignores, vec![".", "."], 0)
   };
 }
 
 /// walker (with compare)
-pub fn walker(dirs: Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
+pub fn walker(inf: bool, dirs: Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
   let ignores = vec![".git", "target"].into_iter().map(|s|
     s.to_string()).collect();
   let f = |pbs: &Vec<&str>| {
     println!("[{}] - [{}]", pbs[0], pbs[1]);
-    let t = match walk_dir_entries!(&ignores, pbs) {
+    let t = match walk_dir_entries!(inf, &ignores, pbs) {
     Err(e) => { eprintln!("{:?}", e); 0 },
     Ok(t) => t
     };
@@ -191,6 +218,7 @@ mod tests {
   /// [-- --nocapture] [-- --show-output]
   #[test]
   fn test_walker() {
-    assert_eq!(walker(take2(std::env::args().skip(1))).unwrap(), ());
+//    assert_eq!(walker(true, take2(std::env::args().skip(1))).unwrap(), ());
+    assert_eq!(walker(false, take2(std::env::args().skip(1))).unwrap(), ());
   }
 }
