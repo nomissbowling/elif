@@ -1,11 +1,52 @@
-#![doc(html_root_url = "https://docs.rs/elif/0.0.2")]
+#![doc(html_root_url = "https://docs.rs/elif/0.0.3")]
 //! file and directory walker for Rust
 //!
 
 use std::error::Error;
+use std::io::{Read, BufReader};
 use std::fs;
 // use fs_extra;
 use std::path::PathBuf;
+
+// use hashes::md5::hash;
+use md5;
+// use binascii::bin2hex;
+
+pub fn file_meta(p: &PathBuf) -> Result<fs::Metadata, Box<dyn Error>> {
+  let Ok(mf) = fs::metadata(p) else {
+    return Err(format!("cannot get metadata: {}", p.display()).into())
+  };
+  Ok(mf)
+}
+
+pub fn md5sum(p: &PathBuf, sz: u64) -> Result<String, Box<dyn Error>> {
+/*
+  let s = "abcdefghijklmnopqrstuvwxyz".as_bytes();
+  let mut digest = vec![0u8; 32];
+  let _r = bin2hex(&hash(s).into_bytes(), &mut digest).expect("digest");
+  Ok(String::from_utf8(digest).unwrap())
+*/
+/*
+  let s = "abcdefghijklmnopqrstuvwxyz".as_bytes();
+  let digest = md5::compute(s);
+  Ok(format!("{:x}", digest))
+*/
+  let mut t: usize = 0;
+  let f = fs::File::open(p)?;
+  let mut rdr = BufReader::new(f);
+  let mut buf = vec![0u8; 8192]; // when use read_exact() [0u8; sz as usize];
+  let mut ctx = md5::Context::new();
+  loop {
+    match rdr.read(&mut buf) {
+//    Err(Error::from(std::io::ErrorKind::UnexpectedEof)) => { break; },
+    Err(_e) => { break; },
+    Ok(l) => { ctx.consume(&buf[..l]); t += l; if t >= sz as usize { break; } }
+    }
+  }
+  if t < sz as usize { return Err("can't read all".into()); }
+  let digest = ctx.compute();
+  Ok(format!("{:x}", digest))
+}
 
 /*
 pub fn read_dir_entries<P: AsRef<Path>>(path: P) -> io::Result<Vec<PathBuf>> {
@@ -49,17 +90,17 @@ pub fn walk_dir_entries(ignores: &Vec<String>, bpaths: &Vec<&str>, dep: u64) ->
   let mut total: u64 = 0;
   let depth = String::from_utf8((0..dep).into_iter().map(|_| 0x20).collect())?;
 //  println!("{}+{} ({})", depth, bpaths[0], bpaths[1]);
-  let Ok(pde) = read_dir_entries(bpaths[0]) else {
-    return Err(format!("no dir entries in [{}]", bpaths[0]).into());
-  };
-  let Ok(qde) = read_dir_entries(bpaths[1]) else {
-    return Err(format!("no dir entries in [{}]", bpaths[1]).into());
-  };
-  for pe in pde {
+  let de = (0..2).into_iter().map(|i| {
+    let Ok(ent) = read_dir_entries(bpaths[i]) else {
+      panic!("no dir entries in [{}]", bpaths[i])
+    };
+    ent
+  }).collect::<Vec<_>>();
+  for pe in &de[0] {
     let p = &pe.path();
     let mut q = PathBuf::from(""); // dummy
     let mut f = false;
-    for qe in &qde {
+    for qe in &de[1] {
       let qpb = &qe.path();
       if qpb.file_name() == p.file_name() { q = qpb.clone(); f = true; break; }
     }
@@ -69,14 +110,16 @@ pub fn walk_dir_entries(ignores: &Vec<String>, bpaths: &Vec<&str>, dep: u64) ->
     // println!("{:?}", pe.file_name()); // OsString
     println!("{}", p.display()); // path::PathBuf
     if p.is_file() {
-      let rmf = fs::metadata(p);
-      match rmf {
-      Err(e) => eprintln!("err: {}", e),
-      Ok(mf) => {
-        println!(" {}", mf.len());
-        total += mf.len();
-      }
-      }
+      let sz = [p, &q].iter().map(|p| {
+        let Ok(mf) = file_meta(p) else { return 0 };
+        mf.len()
+      }).collect::<Vec<_>>();
+      let digest = [p, &q].iter().enumerate().map(|(i, p)| {
+        let Ok(s) = md5sum(p, sz[i]) else { return "".to_string() };
+        s
+      }).collect::<Vec<_>>();
+      for i in 0..2 { println!(" {} {}", sz[i], digest[i]); }
+      total += sz[0];
     }
     if p.is_dir() {
       let e = pe.file_name().to_str().expect("invalid_name").to_string();

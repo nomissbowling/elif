@@ -1,6 +1,6 @@
 [package]
 name = "elif"
-version = "0.0.2" # change with html_root_url in lib.rs
+version = "0.0.3" # change with html_root_url in lib.rs
 edition = "2021"
 authors = ["nomissbowling <nomissbowling@yahoo.co.jp>"]
 
@@ -19,6 +19,11 @@ readme = "README.md"
 
 [dependencies]
 # fs_extra = "1.3"
+
+# hashes = { version = "0.1" } # "0.1.9" 2024
+md5 = { version = "0.7" } # "0.7.0" 2020
+# binascii = { version = "0.1" } # "0.1.4" 2020
+# binascii = { version = "0.1", default-features = false, features = ["encode", "decode"] } # custom
 
 # chrono = "0.4"
 chrono = { version = "0.4", features = ["serde"] } # chrono with serde
